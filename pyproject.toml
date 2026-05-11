@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thesis-benchmark"
+version = "1.0.0"
+description = "Benchmarking agentic web extraction: rule-based, semantic, and autonomous approaches"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0.0",
+    "playwright>=1.40.0",
+    "anthropic>=0.20.0",
+    "openai>=1.10.0",
+    "httpx>=0.25.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]

@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 
 class JobListing(BaseModel):
@@ -6,3 +7,4 @@ class JobListing(BaseModel):
     company: str
     location: str
     url: str
+    description: Optional[str] = None
