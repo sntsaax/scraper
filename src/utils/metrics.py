@@ -72,6 +72,61 @@ def calculate_record_coverage(
     return (matched / len(gt_urls)) * 100 if gt_urls else 0.0
 
 
+def calculate_record_match_summary(
+    ground_truth: List[Dict[str, Any]],
+    results: List[Dict[str, Any]],
+) -> Dict[str, float]:
+    """Calculate record-level precision, recall, and F1 using exact URL and field matches."""
+    if not ground_truth:
+        return {
+            "record_precision": 0.0,
+            "record_recall": 0.0,
+            "record_f1": 0.0,
+            "exact_record_matches": 0.0,
+        }
+
+    gt_buckets: Dict[str, List[Dict[str, Any]]] = {}
+    for gt_record in ground_truth:
+        gt_url = normalize_text(gt_record.get("url"))
+        if gt_url:
+            gt_buckets.setdefault(gt_url, []).append(gt_record)
+
+    exact_record_matches = 0
+    matched_result_urls = set()
+
+    for result in results:
+        result_url = normalize_text(result.get("url"))
+        if not result_url or result_url not in gt_buckets:
+            continue
+
+        candidate_bucket = gt_buckets[result_url]
+        for candidate_index, gt_record in enumerate(candidate_bucket):
+            if all(
+                normalize_text(gt_record.get(field, "")) == normalize_text(result.get(field, ""))
+                for field in ["title", "company", "location", "url"]
+            ):
+                exact_record_matches += 1
+                matched_result_urls.add(result_url)
+                candidate_bucket.pop(candidate_index)
+                break
+
+    precision_denominator = len(results)
+    recall_denominator = len(ground_truth)
+    precision = (exact_record_matches / precision_denominator * 100) if precision_denominator else 0.0
+    recall = (exact_record_matches / recall_denominator * 100) if recall_denominator else 0.0
+    if precision + recall == 0:
+        f1 = 0.0
+    else:
+        f1 = (2 * precision * recall) / (precision + recall)
+
+    return {
+        "record_precision": round(precision, 2),
+        "record_recall": round(recall, 2),
+        "record_f1": round(f1, 2),
+        "exact_record_matches": float(exact_record_matches),
+    }
+
+
 def count_unsupported_records(
     ground_truth: List[Dict[str, Any]],
     results: List[Dict[str, Any]],
@@ -245,6 +300,7 @@ def format_benchmark_results(name: str, metrics: Dict) -> str:
     return (
         f"[{name}] Extracted: {metrics.get('extracted_count', 0)} | "
         f"Accuracy: {metrics.get('accuracy', 0):.2f}% | "
+        f"F1: {metrics.get('record_f1', 0):.2f}% | "
         f"Coverage: {metrics.get('record_coverage', 0):.2f}% | "
         f"Schema Valid: {metrics.get('schema_valid', False)} | "
         f"Latency: {metrics.get('latency_seconds', 0):.2f}s | "

@@ -19,6 +19,7 @@ from src.benchmark_profile import SiteProfile, load_site_profiles
 from src.utils.metrics import (
     calculate_field_accuracy,
     calculate_record_coverage,
+    calculate_record_match_summary,
     calculate_reliability_summary,
     validate_schema,
     categorize_failure,
@@ -201,12 +202,18 @@ def run_single_extraction(
 
     if parsed_data and ground_truth:
         accuracy = calculate_field_accuracy(ground_truth, parsed_data)
+        record_summary = calculate_record_match_summary(ground_truth, parsed_data)
         result_record["accuracy"] = round(accuracy, 2)
         result_record["record_coverage"] = round(calculate_record_coverage(ground_truth, parsed_data), 2)
+        result_record.update(record_summary)
         logger.info(f"Field-level accuracy: {accuracy:.2f}%")
     else:
         result_record["accuracy"] = 0.0
         result_record["record_coverage"] = 0.0
+        result_record["record_precision"] = 0.0
+        result_record["record_recall"] = 0.0
+        result_record["record_f1"] = 0.0
+        result_record["exact_record_matches"] = 0.0
 
     unsupported_indices = []
     duplicate_indices = []
@@ -238,6 +245,7 @@ def run_single_extraction(
     display_metrics = {
         "extracted_count": extracted_count,
         "accuracy": result_record["accuracy"],
+        "record_f1": result_record["record_f1"],
         "record_coverage": result_record["record_coverage"],
         "schema_valid": schema_valid,
         "latency_seconds": result_record["latency_seconds"],
@@ -333,6 +341,9 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "system": result.get("system", "unknown"),
                 "runs": 0,
                 "accuracy_avg": 0.0,
+                "record_precision_avg": 0.0,
+                "record_recall_avg": 0.0,
+                "record_f1_avg": 0.0,
                 "coverage_avg": 0.0,
                 "latency_avg": 0.0,
                 "cost_avg": 0.0,
@@ -350,6 +361,9 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         runs = [result for result in all_results if f"{result.get('site', 'unknown')}::{result.get('system', 'unknown')}" == key]
         payload["runs"] = len(runs)
         payload["accuracy_avg"] = round(sum(item.get("accuracy", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
+        payload["record_precision_avg"] = round(sum(item.get("record_precision", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
+        payload["record_recall_avg"] = round(sum(item.get("record_recall", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
+        payload["record_f1_avg"] = round(sum(item.get("record_f1", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
         payload["coverage_avg"] = round(sum(item.get("record_coverage", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
         positive_latencies = [item.get("latency_seconds", 0.0) for item in runs if item.get("latency_seconds", -1) > 0]
         payload["latency_avg"] = round(sum(positive_latencies) / len(positive_latencies), 2) if positive_latencies else 0.0
@@ -382,9 +396,13 @@ def save_summary_csv(all_results: List[Dict[str, Any]]) -> str:
         "system",
         "site",
         "site_url",
+        "benchmark_url",
         "run_id",
         "extracted_count",
         "accuracy",
+        "record_precision",
+        "record_recall",
+        "record_f1",
         "record_coverage",
         "schema_valid",
         "latency_seconds",
@@ -450,6 +468,9 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
 
         extracted_counts = [r.get("extracted_count", 0) for r in runs]
         accuracies = [r.get("accuracy", 0.0) for r in runs]
+        precisions = [r.get("record_precision", 0.0) for r in runs]
+        recalls = [r.get("record_recall", 0.0) for r in runs]
+        f1_scores = [r.get("record_f1", 0.0) for r in runs]
         coverages = [r.get("record_coverage", 0.0) for r in runs]
         latencies = [r.get("latency_seconds", -1.0) for r in runs if r.get("latency_seconds", -1) > 0]
         schema_valids = [r.get("schema_valid", False) for r in runs]
@@ -459,6 +480,9 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
         logger.info(f"  Extracted (avg/min/max): {sum(extracted_counts)/len(extracted_counts):.1f} / "
                    f"{min(extracted_counts)}/{max(extracted_counts)}")
         logger.info(f"  Accuracy (avg): {sum(accuracies)/len(accuracies):.2f}%")
+        logger.info(f"  Precision (avg): {sum(precisions)/len(precisions):.2f}%")
+        logger.info(f"  Recall (avg): {sum(recalls)/len(recalls):.2f}%")
+        logger.info(f"  F1 (avg): {sum(f1_scores)/len(f1_scores):.2f}%")
         logger.info(f"  Coverage (avg): {sum(coverages)/len(coverages):.2f}%")
         logger.info(f"  Schema Valid: {sum(schema_valids)}/{len(schema_valids)}")
         reliability = calculate_reliability_summary(runs)

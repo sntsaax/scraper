@@ -6,7 +6,7 @@ This project benchmarks three extraction strategies for dynamic job listings:
 * a semantic LLM-based extractor,
 * an autonomous browser-agent style scraper.
 
-The benchmark is profile-driven, so it can scale from the current Mellby Gård careers page to additional zero-shot site profiles without rewriting the runner.
+The benchmark is profile-driven, so it can scale from the current Mellby Gård careers page to additional zero-shot site profiles without rewriting the runner. The current setup includes three layouts: one live site and two local fixtures that exercise different DOM structures.
 
 Site profiles are loaded from `data/site_profiles.json` by default. Set `BENCHMARK_SITE_PROFILES` if you want to point to another profile file.
 
@@ -31,6 +31,8 @@ Results are written to `data/results/`:
 * per-run JSON logs
 
 The JSON summary includes reliability, success rate, coverage stability, and latency stability for each site and scraper pair.
+
+For correctness, the benchmark now reports field-level accuracy plus record-level precision, recall, and F1. A 100% score is still possible on a small deterministic fixture, but it only means that site was matched exactly. It should not be interpreted as generalization across sites.
 
 ## Environment
 

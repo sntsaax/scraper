@@ -85,7 +85,7 @@ class RuleFollowerScraper(BaseScraper):
                         if link_el:
                             href = link_el.get_attribute("href") or ""
 
-                    url = urljoin(site.url, href) if href else ""
+                    url = urljoin(site.benchmark_url(), href) if href else ""
 
                     job = JobListing(
                         title=title,
