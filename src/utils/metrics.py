@@ -16,43 +16,45 @@ def calculate_field_accuracy(
 ) -> float:
     """
     Calculate field-level accuracy.
-    Matches records by URL, then compares title, company, location.
-    Returns percentage of correctly extracted fields.
+    Matches records by URL, then compares title, company, location, and url.
+    Unsupported extra records and missing ground-truth records count as errors.
+    Returns percentage of correctly extracted fields over all expected fields.
     """
     if not ground_truth:
         return 0.0
 
-    # Build lookup from ground truth by URL
+    # Build lookup from ground truth by URL and match results one-to-one.
     gt_by_url = {gt.get("url", ""): gt for gt in ground_truth}
-    
-    total_fields = 0
-    matched_fields = 0
-    
-    # For each result, try to match by URL
+    result_buckets: Dict[str, List[Dict[str, Any]]] = {}
     for result in results:
         result_url = result.get("url", "")
-        
-        if result_url in gt_by_url:
-            gt_record = gt_by_url[result_url]
-            
-            # Compare key fields
-            for field in ["title", "company", "location"]:
-                total_fields += 1
-                
+        result_buckets.setdefault(result_url, []).append(result)
+
+    expected_fields_per_record = 4  # title, company, location, url
+    matched_fields = 0
+    unmatched_extra_results = 0
+
+    for gt_record in ground_truth:
+        gt_url = gt_record.get("url", "")
+        candidate_bucket = result_buckets.get(gt_url, [])
+
+        if candidate_bucket:
+            result_record = candidate_bucket.pop(0)
+            for field in ["title", "company", "location", "url"]:
                 gt_value = normalize_text(gt_record.get(field, ""))
-                result_value = normalize_text(result.get(field, ""))
-                
+                result_value = normalize_text(result_record.get(field, ""))
                 if gt_value == result_value:
                     matched_fields += 1
-    
-    # If no results matched by URL, use count-based fallback
+
+    # Any remaining result records are unsupported extras and should reduce accuracy.
+    for remaining_bucket in result_buckets.values():
+        unmatched_extra_results += len(remaining_bucket)
+
+    total_fields = (len(ground_truth) + unmatched_extra_results) * expected_fields_per_record
     if total_fields == 0:
-        match_count = min(len(results), len(ground_truth))
-        if ground_truth:
-            return (match_count / len(ground_truth)) * 100
         return 0.0
-    
-    return (matched_fields / total_fields) * 100 if total_fields > 0 else 0.0
+
+    return (matched_fields / total_fields) * 100
 
 
 def validate_schema(data: Any) -> tuple[bool, Optional[str]]:
