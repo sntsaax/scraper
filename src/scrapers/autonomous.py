@@ -1,7 +1,9 @@
 import json
 from typing import List, Optional
+from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
 from src.scrapers.base import BaseScraper
+from src.benchmark_profile import SiteProfile
 from src.schemas import JobListing
 from src.utils.logger import get_logger
 
@@ -15,104 +17,112 @@ class AutonomousScraper(BaseScraper):
     """
 
     def __init__(self):
-        self.url = (
-            "https://mellby-gaard.se/om-oss/karriarssida"
-            "?searchWord=&sourceName=&city=&page=0"
-        )
+        super().__init__()
         self.max_interactions = 10
 
-    def extract(self) -> List[JobListing]:
+    def extract(self, site: SiteProfile) -> List[JobListing]:
         """Extract job listings using autonomous browser interaction."""
         results = []
+        fallback_used = False
+        selector_used = None
+        cards_found = 0
+        interactions = 0
+        seen_urls = set()
 
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
-                page.goto(self.url, wait_until="load")
+                page.goto(site.url, wait_until="load")
 
                 logger.info("Page loaded, starting autonomous extraction...")
 
-                # Step 1: Handle cookie banner (observation + action)
                 try:
-                    cookie_button = page.query_selector("button:has-text('Acceptera')")
-                    if cookie_button:
-                        logger.info("Autonomous: Found and clicking cookie banner...")
-                        page.click("button:has-text('Acceptera')", timeout=3000)
+                    for cookie_selector in site.cookie_selectors:
+                        cookie_button = page.query_selector(cookie_selector)
+                        if cookie_button:
+                            logger.info("Autonomous: Found and clicking cookie banner...")
+                            page.click(cookie_selector, timeout=3000)
+                            interactions += 1
+                            break
                 except Exception as e:
                     logger.warning(f"Autonomous: Cookie handling failed: {e}")
 
-                # Step 2: Observe page structure
                 logger.info("Autonomous: Observing page structure...")
-                selector = "a:has(.career-page__job--inner-container)"
+                selector_candidates = list(site.item_selectors)
+                selector_candidates.extend([
+                    "a[href*='/karriar']",
+                    "article",
+                    "li[class*='job']",
+                    "div[class*='job']",
+                ])
 
-                # Step 3: Wait for content
                 try:
-                    page.wait_for_selector(selector, timeout=5000)
-                except Exception:
-                    logger.warning("Autonomous: Job cards selector not found, trying alternatives...")
-                    # Try alternative selectors for different page structures
-                    alt_selectors = [
-                        "div[class*='job']",
-                        "article",
-                        "li[class*='job']",
-                    ]
-                    selector = None
-                    for alt_sel in alt_selectors:
+                    for candidate in selector_candidates:
                         try:
-                            page.wait_for_selector(alt_sel, timeout=2000)
-                            selector = alt_sel
-                            logger.info(f"Autonomous: Found alternative selector: {alt_sel}")
+                            page.wait_for_selector(candidate, timeout=2500)
+                            selector_used = candidate
                             break
                         except Exception:
+                            fallback_used = True
                             continue
+                    if not selector_used:
+                        raise RuntimeError("No job listing selectors found")
+                except Exception:
+                    logger.warning("Autonomous: Job cards selector not found, trying alternatives...")
+                    selector_used = "a[href]"
+                    fallback_used = True
 
-                    if not selector:
-                        logger.error("Autonomous: No job listing selectors found")
-                        browser.close()
-                        return results
-
-                # Step 4: Scroll to load more content (if needed)
                 logger.info("Autonomous: Scrolling to load content...")
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                for _ in range(max(site.max_scrolls, 1)):
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    interactions += 1
 
-                # Step 5: Extract all visible job cards
                 logger.info("Autonomous: Extracting visible job listings...")
-                job_cards = page.query_selector_all(selector)
+                job_cards = page.query_selector_all(selector_used)
+                if not job_cards:
+                    job_cards = page.query_selector_all("a[href]")
+                    selector_used = "a[href]"
+                    fallback_used = True
+                cards_found = len(job_cards)
                 logger.info(f"Autonomous: Found {len(job_cards)} job cards")
 
                 for idx, card in enumerate(job_cards):
                     try:
-                        # Try standard selectors first
-                        title_el = card.query_selector(
-                            ".career-page__job--text--title"
-                        )
-                        loc_el = card.query_selector(
-                            ".career-page__job--text--location"
-                        )
+                        title_el = card.query_selector(site.title_selector)
+                        loc_el = card.query_selector(site.location_selector)
+
+                        if not title_el:
+                            title_el = card.query_selector("h1, h2, h3, .title, .job-title")
+                        if not loc_el:
+                            loc_el = card.query_selector(".location, [data-location]")
 
                         title = title_el.inner_text().strip() if title_el else ""
                         location = loc_el.inner_text().strip() if loc_el else ""
-                        url = card.get_attribute("href") or ""
+                        href = card.get_attribute("href") or ""
+                        if not href:
+                            link_el = card.query_selector(
+                                "a[href*='jobid'], a[href*='lediga-jobb'], a[href*='studentconsulting'], a[href*='academedia'], a[href]"
+                            )
+                            if link_el:
+                                href = link_el.get_attribute("href") or ""
 
-                        # Make URL absolute if needed
-                        if url and not url.startswith("http"):
-                            url = f"https://mellby-gaard.se{url}"
+                        url = urljoin(site.url, href) if href else ""
 
-                        if title and url:  # Require at least title and URL
+                        if title and url and url not in seen_urls:
                             job = JobListing(
                                 title=title,
-                                company="Mellby Gård",
+                                company=site.company_name,
                                 location=location,
                                 url=url,
                             )
                             results.append(job)
+                            seen_urls.add(url)
                             logger.info(f"Autonomous: Extracted job {idx + 1}: {title}")
 
                     except Exception as e:
                         logger.warning(f"Autonomous: Failed to extract card {idx}: {e}")
 
-                # Step 6: Try to interact with pagination if available
                 logger.info("Autonomous: Checking for pagination...")
                 next_button = page.query_selector("button[aria-label*='next'], a[rel='next']")
                 if next_button and len(results) < 50:  # Safety limit
@@ -120,7 +130,7 @@ class AutonomousScraper(BaseScraper):
                         logger.info("Autonomous: Found next button, attempting click...")
                         page.click("button[aria-label*='next'], a[rel='next']")
                         page.wait_for_load_state("load", timeout=3000)
-                        # Could recursively extract more, but keep it simple for thesis
+                        interactions += 1
                         logger.info("Autonomous: Pagination attempted (limited to 1 page)")
                     except Exception as e:
                         logger.info(f"Autonomous: Pagination failed: {e}")
@@ -130,5 +140,11 @@ class AutonomousScraper(BaseScraper):
         except Exception as e:
             logger.error(f"Autonomous extraction failed: {e}")
 
+        self._last_run_metrics = {
+            "selector_used": selector_used,
+            "fallback_used": fallback_used,
+            "cards_observed": cards_found,
+            "interaction_count": interactions,
+        }
         logger.info(f"Autonomous: Extracted {len(results)} total jobs.")
         return results

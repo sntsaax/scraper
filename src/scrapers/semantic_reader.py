@@ -1,68 +1,98 @@
 import json
 import os
-from typing import List, Optional
+from typing import List
 from playwright.sync_api import sync_playwright
+from src.scrapers.base import BaseScraper
+from src.benchmark_profile import SiteProfile
+from src.schemas import JobListing
+from src.utils.logger import get_logger
+import json
+import os
+from typing import List
+
+from playwright.sync_api import sync_playwright
+
+from src.benchmark_profile import SiteProfile
 from src.scrapers.base import BaseScraper
 from src.schemas import JobListing
 from src.utils.logger import get_logger
+
 
 logger = get_logger(__name__)
 
 
 class SemanticReaderScraper(BaseScraper):
-    """
-    LLM-based semantic extraction using Claude.
-    Extracts job listings by analyzing page content without relying on selectors.
-    """
+    """LLM-based semantic extraction using Claude."""
 
     def __init__(self):
+        super().__init__()
         api_key = os.getenv("ANTHROPIC_API_KEY")
         self.available = False
-        
+        self.client = None
+
         if not api_key or api_key == "your_anthropic_key_here":
-            logger.warning("SemanticReader: ANTHROPIC_API_KEY not set. This scraper will be skipped.")
+            logger.warning(
+                "SemanticReader: ANTHROPIC_API_KEY not set. This scraper will be skipped."
+            )
             return
-        
+
         try:
             from anthropic import Anthropic
+
             self.client = Anthropic(api_key=api_key)
             self.available = True
             logger.info("SemanticReader: Initialized successfully")
         except Exception as e:
             logger.warning(f"SemanticReader: Failed to initialize: {e}")
-            
-        self.url = (
-            "https://mellby-gaard.se/om-oss/karriarssida"
-            "?searchWord=&sourceName=&city=&page=0"
-        )
 
-    def extract(self) -> List[JobListing]:
+    def _parse_response(self, response_text: str):
+        try:
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            if "```" in response_text:
+                json_str = response_text.split("```")[1]
+                if json_str.startswith("json"):
+                    json_str = json_str[4:]
+                return json.loads(json_str.strip())
+            raise
+
+    def extract(self, site: SiteProfile) -> List[JobListing]:
         """Extract job listings using semantic LLM analysis."""
-        results = []
-        
+        results: List[JobListing] = []
+        self._last_run_metrics = {
+            "model": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "fallback_used": False,
+        }
+
         if not self.available:
             logger.warning("SemanticReader: API key not configured, returning empty results")
             return results
-        
+
         raw_html = None
+        raw_text = None
 
         try:
-            # Fetch page content with browser
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
-                page.goto(self.url, wait_until="load")
+                page.goto(site.url, wait_until="load")
 
-                # Handle cookie banner
                 try:
-                    page.click("button:has-text('Acceptera')", timeout=3000)
-                    logger.info("Cookie banner dismissed.")
+                    for cookie_selector in site.cookie_selectors:
+                        try:
+                            page.click(cookie_selector, timeout=3000)
+                            logger.info("Cookie banner dismissed.")
+                            break
+                        except Exception:
+                            continue
                 except Exception:
                     logger.warning("No cookie banner found.")
 
-                # Wait for content
                 page.wait_for_selector("body", timeout=5000)
                 raw_html = page.content()
+                raw_text = page.locator("body").inner_text()
                 browser.close()
 
             logger.info("Page content fetched successfully.")
@@ -75,11 +105,12 @@ class SemanticReaderScraper(BaseScraper):
             logger.error("No HTML content retrieved")
             return results
 
-        # Send to Claude for extraction
         try:
-            extraction_prompt = f"""You are an expert at extracting structured data from HTML.
+            payload = raw_html[: site.semantic_max_chars]
+            text_payload = (raw_text or "")[: site.semantic_max_chars]
+            extraction_prompt = f"""You are an expert at extracting structured data from dynamic job pages.
 
-Your task is to extract ALL job listings from this HTML and return them as a JSON array.
+Your task is to extract ALL job listings from the provided page content and return them as a JSON array.
 
 SCHEMA:
 [
@@ -100,8 +131,11 @@ RULES:
 - Ensure all URLs are complete (with https://)
 - Return empty array [] if no job listings found
 
+PAGE TEXT:
+{text_payload}
+
 HTML Content:
-{raw_html[:8000]}
+{payload}
 
 Return only the JSON array:"""
 
@@ -114,21 +148,18 @@ Return only the JSON array:"""
             response_text = response.content[0].text.strip()
             logger.info(f"Claude response received: {len(response_text)} chars")
 
-            # Parse JSON response
-            try:
-                # Try direct parsing first
-                parsed = json.loads(response_text)
-            except json.JSONDecodeError:
-                # Try to extract JSON if wrapped in markdown
-                if "```" in response_text:
-                    json_str = response_text.split("```")[1]
-                    if json_str.startswith("json"):
-                        json_str = json_str[4:]
-                    parsed = json.loads(json_str.strip())
-                else:
-                    raise
+            usage = getattr(response, "usage", None)
+            if usage:
+                self._last_run_metrics["input_tokens"] = getattr(usage, "input_tokens", 0) or 0
+                self._last_run_metrics["output_tokens"] = getattr(usage, "output_tokens", 0) or 0
+            self._last_run_metrics["model"] = "claude-3-5-sonnet-20241022"
 
-            # Convert to JobListing objects
+            try:
+                parsed = self._parse_response(response_text)
+            except Exception:
+                self._last_run_metrics["fallback_used"] = True
+                parsed = []
+
             if not isinstance(parsed, list):
                 parsed = [parsed] if parsed else []
 

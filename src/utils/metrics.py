@@ -57,6 +57,34 @@ def calculate_field_accuracy(
     return (matched_fields / total_fields) * 100
 
 
+def calculate_record_coverage(
+    ground_truth: List[Dict[str, Any]],
+    results: List[Dict[str, Any]],
+) -> float:
+    """Return the share of ground-truth records that were recovered at least once."""
+    if not ground_truth:
+        return 0.0
+
+    gt_urls = {normalize_text(item.get("url")) for item in ground_truth if item.get("url")}
+    result_urls = {normalize_text(item.get("url")) for item in results if item.get("url")}
+    matched = len(gt_urls.intersection(result_urls))
+    return (matched / len(gt_urls)) * 100 if gt_urls else 0.0
+
+
+def count_unsupported_records(
+    ground_truth: List[Dict[str, Any]],
+    results: List[Dict[str, Any]],
+) -> int:
+    """Count records whose URLs do not appear in the ground-truth set."""
+    gt_urls = {normalize_text(item.get("url")) for item in ground_truth if item.get("url")}
+    unsupported = 0
+    for record in results:
+        result_url = normalize_text(record.get("url"))
+        if result_url and result_url not in gt_urls:
+            unsupported += 1
+    return unsupported
+
+
 def validate_schema(data: Any) -> tuple[bool, Optional[str]]:
     """
     Validate that data conforms to JobListing schema.
@@ -108,7 +136,7 @@ def categorize_failure(
     return "success"
 
 
-def detect_hallucinations(
+def detect_unsupported_records(
     ground_truth_urls: set,
     results: List[Dict[str, Any]],
 ) -> List[int]:
@@ -122,6 +150,13 @@ def detect_hallucinations(
         if result_url and result_url not in ground_truth_urls:
             hallucinated_indices.append(idx)
     return hallucinated_indices
+
+
+def detect_hallucinations(
+    ground_truth_urls: set,
+    results: List[Dict[str, Any]],
+) -> List[int]:
+    return detect_unsupported_records(ground_truth_urls, results)
 
 
 def detect_duplicates(results: List[Dict[str, Any]]) -> List[int]:
@@ -148,8 +183,10 @@ def format_benchmark_results(name: str, metrics: Dict) -> str:
     return (
         f"[{name}] Extracted: {metrics.get('extracted_count', 0)} | "
         f"Accuracy: {metrics.get('accuracy', 0):.2f}% | "
+        f"Coverage: {metrics.get('record_coverage', 0):.2f}% | "
         f"Schema Valid: {metrics.get('schema_valid', False)} | "
         f"Latency: {metrics.get('latency_seconds', 0):.2f}s | "
+        f"Cost: ${metrics.get('estimated_cost_usd', 0):.4f} | "
         f"Failure: {metrics.get('failure_type', 'unknown')}"
     )
 
