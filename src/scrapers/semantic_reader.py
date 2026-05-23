@@ -1,14 +1,6 @@
 import json
 import os
 from typing import List
-from playwright.sync_api import sync_playwright
-from src.scrapers.base import BaseScraper
-from src.benchmark_profile import SiteProfile
-from src.schemas import JobListing
-from src.utils.logger import get_logger
-import json
-import os
-from typing import List
 
 from playwright.sync_api import sync_playwright
 
@@ -77,7 +69,7 @@ class SemanticReaderScraper(BaseScraper):
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
-                page.goto(site.url, wait_until="load")
+                page.goto(site.benchmark_url(), wait_until="load")
 
                 try:
                     for cookie_selector in site.cookie_selectors:

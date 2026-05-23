@@ -10,6 +10,7 @@ class SiteProfile:
     name: str
     url: str
     ground_truth_file: str
+    local_html_file: Optional[str] = None
     company_name: str = "Mellby Gård"
     item_selectors: tuple[str, ...] = (
         "a:has(.career-page__job--inner-container)",
@@ -27,6 +28,11 @@ class SiteProfile:
     def ground_truth_path(self) -> Path:
         return Path(self.ground_truth_file)
 
+    def benchmark_url(self) -> str:
+        if self.local_html_file:
+            return Path(self.local_html_file).resolve().as_uri()
+        return self.url
+
 
 DEFAULT_SITE_PROFILE = SiteProfile(
     name=os.getenv("BENCHMARK_SITE_NAME", "mellby_gaard_careers"),
@@ -43,7 +49,11 @@ def load_site_profiles() -> List[SiteProfile]:
     """Load site profiles from JSON or return the default benchmark site."""
     config_path = os.getenv("BENCHMARK_SITE_PROFILES")
     if not config_path:
-        return [DEFAULT_SITE_PROFILE]
+        default_workspace_path = Path("data/site_profiles.json")
+        if default_workspace_path.exists():
+            config_path = str(default_workspace_path)
+        else:
+            return [DEFAULT_SITE_PROFILE]
 
     path = Path(config_path)
     if not path.exists():
@@ -61,6 +71,7 @@ def load_site_profiles() -> List[SiteProfile]:
                     ground_truth_file=raw_profile.get(
                         "ground_truth_file", DEFAULT_SITE_PROFILE.ground_truth_file
                     ),
+                    local_html_file=raw_profile.get("local_html_file"),
                     company_name=raw_profile.get(
                         "company_name", DEFAULT_SITE_PROFILE.company_name
                     ),
@@ -90,3 +101,7 @@ def load_site_profiles() -> List[SiteProfile]:
         return profiles or [DEFAULT_SITE_PROFILE]
     except Exception:
         return [DEFAULT_SITE_PROFILE]
+
+
+def profile_names() -> List[str]:
+    return [profile.name for profile in load_site_profiles()]

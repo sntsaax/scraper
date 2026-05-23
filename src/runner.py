@@ -19,6 +19,7 @@ from src.benchmark_profile import SiteProfile, load_site_profiles
 from src.utils.metrics import (
     calculate_field_accuracy,
     calculate_record_coverage,
+    calculate_reliability_summary,
     validate_schema,
     categorize_failure,
     count_unsupported_records,
@@ -149,6 +150,7 @@ def run_single_extraction(
         "system": scraper_name,
         "site": site.name,
         "site_url": site.url,
+        "benchmark_url": site.benchmark_url(),
         "run_id": run_id,
         "uuid": run_uuid,
         "timestamp": datetime.now().isoformat(),
@@ -302,6 +304,7 @@ def run_all_benchmarks() -> List[Dict[str, Any]]:
                             "system": scraper_name,
                             "site": site.name,
                             "site_url": site.url,
+                            "benchmark_url": site.benchmark_url(),
                             "run_id": run_id,
                             "timestamp": datetime.now().isoformat(),
                             "extracted_count": 0,
@@ -335,6 +338,11 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "cost_avg": 0.0,
                 "schema_valid_rate": 0.0,
                 "extracted_avg": 0.0,
+                "reliability_score": 0.0,
+                "success_rate": 0.0,
+                "count_stability": 0.0,
+                "coverage_stability": 0.0,
+                "latency_stability": 0.0,
             },
         )
 
@@ -343,10 +351,17 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload["runs"] = len(runs)
         payload["accuracy_avg"] = round(sum(item.get("accuracy", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
         payload["coverage_avg"] = round(sum(item.get("record_coverage", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
-        payload["latency_avg"] = round(sum(item.get("latency_seconds", 0.0) for item in runs if item.get("latency_seconds", -1) > 0) / max(len([item for item in runs if item.get("latency_seconds", -1) > 0]), 1), 2)
+        positive_latencies = [item.get("latency_seconds", 0.0) for item in runs if item.get("latency_seconds", -1) > 0]
+        payload["latency_avg"] = round(sum(positive_latencies) / len(positive_latencies), 2) if positive_latencies else 0.0
         payload["cost_avg"] = round(sum(item.get("estimated_cost_usd", 0.0) for item in runs) / len(runs), 6) if runs else 0.0
         payload["schema_valid_rate"] = round(sum(1 for item in runs if item.get("schema_valid", False)) / len(runs) * 100, 2) if runs else 0.0
         payload["extracted_avg"] = round(sum(item.get("extracted_count", 0) for item in runs) / len(runs), 2) if runs else 0.0
+        reliability = calculate_reliability_summary(runs)
+        payload["reliability_score"] = reliability["reliability_score"]
+        payload["success_rate"] = reliability["success_rate"]
+        payload["count_stability"] = reliability["count_stability"]
+        payload["coverage_stability"] = reliability["coverage_stability"]
+        payload["latency_stability"] = reliability["latency_stability"]
 
     return {
         "generated_at": datetime.now().isoformat(),
@@ -446,6 +461,9 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
         logger.info(f"  Accuracy (avg): {sum(accuracies)/len(accuracies):.2f}%")
         logger.info(f"  Coverage (avg): {sum(coverages)/len(coverages):.2f}%")
         logger.info(f"  Schema Valid: {sum(schema_valids)}/{len(schema_valids)}")
+        reliability = calculate_reliability_summary(runs)
+        logger.info(f"  Reliability: {reliability['reliability_score']:.2f}%")
+        logger.info(f"  Success Rate: {reliability['success_rate']:.2f}%")
         logger.info(f"  Cost (avg): ${sum(costs)/len(costs):.4f}")
         if latencies:
             logger.info(f"  Latency (avg/min/max): {sum(latencies)/len(latencies):.2f}s / "

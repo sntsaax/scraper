@@ -8,6 +8,8 @@ This project benchmarks three extraction strategies for dynamic job listings:
 
 The benchmark is profile-driven, so it can scale from the current Mellby Gård careers page to additional zero-shot site profiles without rewriting the runner.
 
+Site profiles are loaded from `data/site_profiles.json` by default. Set `BENCHMARK_SITE_PROFILES` if you want to point to another profile file.
+
 ## Run
 
 ```bash
@@ -27,6 +29,8 @@ Results are written to `data/results/`:
 * `benchmark_summary.csv`
 * `benchmark_summary.json`
 * per-run JSON logs
+
+The JSON summary includes reliability, success rate, coverage stability, and latency stability for each site and scraper pair.
 
 ## Environment
 

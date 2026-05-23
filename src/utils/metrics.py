@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import json
+from statistics import mean, pstdev
 from src.schemas import JobListing
 
 
@@ -178,6 +179,67 @@ def detect_duplicates(results: List[Dict[str, Any]]) -> List[int]:
     return duplicate_indices
 
 
+def _bounded_stability(values: List[float]) -> float:
+    """Convert a series into a 0-100 stability score where higher is steadier."""
+    clean_values = [value for value in values if value is not None]
+    if len(clean_values) <= 1:
+        return 100.0
+
+    avg_value = mean(clean_values)
+    if avg_value == 0:
+        return 100.0 if all(value == 0 for value in clean_values) else 0.0
+
+    spread = pstdev(clean_values)
+    penalty = min(100.0, (spread / abs(avg_value)) * 100.0)
+    return round(max(0.0, 100.0 - penalty), 2)
+
+
+def calculate_reliability_summary(runs: List[Dict[str, Any]]) -> Dict[str, float]:
+    """
+    Summarize run-to-run reliability for a scraper/site pair.
+
+    Reliability is modeled as the average of three parts:
+    - success rate: runs that completed without extraction failure
+    - schema-valid rate: runs that produced schema-valid output
+    - stability: average stability of output size, coverage, and latency
+    """
+    if not runs:
+        return {
+            "success_rate": 0.0,
+            "schema_valid_rate": 0.0,
+            "count_stability": 0.0,
+            "coverage_stability": 0.0,
+            "latency_stability": 0.0,
+            "reliability_score": 0.0,
+        }
+
+    run_count = len(runs)
+    successful_runs = sum(1 for run in runs if run.get("failure_type") == "success")
+    schema_valid_runs = sum(1 for run in runs if run.get("schema_valid", False))
+
+    extracted_counts = [float(run.get("extracted_count", 0) or 0) for run in runs]
+    coverage_values = [float(run.get("record_coverage", 0) or 0) for run in runs]
+    latency_values = [float(run.get("latency_seconds", 0) or 0) for run in runs if float(run.get("latency_seconds", 0) or 0) > 0]
+
+    count_stability = _bounded_stability(extracted_counts)
+    coverage_stability = _bounded_stability(coverage_values)
+    latency_stability = _bounded_stability(latency_values) if latency_values else 0.0
+
+    success_rate = round((successful_runs / run_count) * 100.0, 2)
+    schema_valid_rate = round((schema_valid_runs / run_count) * 100.0, 2)
+    stability_score = round((count_stability + coverage_stability + latency_stability) / 3.0, 2)
+    reliability_score = round((success_rate + schema_valid_rate + stability_score) / 3.0, 2)
+
+    return {
+        "success_rate": success_rate,
+        "schema_valid_rate": schema_valid_rate,
+        "count_stability": count_stability,
+        "coverage_stability": coverage_stability,
+        "latency_stability": latency_stability,
+        "reliability_score": reliability_score,
+    }
+
+
 def format_benchmark_results(name: str, metrics: Dict) -> str:
     """Format metrics for display."""
     return (
@@ -186,6 +248,7 @@ def format_benchmark_results(name: str, metrics: Dict) -> str:
         f"Coverage: {metrics.get('record_coverage', 0):.2f}% | "
         f"Schema Valid: {metrics.get('schema_valid', False)} | "
         f"Latency: {metrics.get('latency_seconds', 0):.2f}s | "
+        f"Reliability: {metrics.get('reliability_score', 0):.2f}% | "
         f"Cost: ${metrics.get('estimated_cost_usd', 0):.4f} | "
         f"Failure: {metrics.get('failure_type', 'unknown')}"
     )

@@ -19,7 +19,7 @@ class RuleFollowerScraper(BaseScraper):
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
 
-            page.goto(site.url, wait_until="load")
+            page.goto(site.benchmark_url(), wait_until="load")
 
             try:
                 for cookie_selector in site.cookie_selectors:

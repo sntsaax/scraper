@@ -33,7 +33,7 @@ class AutonomousScraper(BaseScraper):
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
-                page.goto(site.url, wait_until="load")
+                page.goto(site.benchmark_url(), wait_until="load")
 
                 logger.info("Page loaded, starting autonomous extraction...")
 
