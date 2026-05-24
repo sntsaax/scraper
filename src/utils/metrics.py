@@ -266,6 +266,8 @@ def calculate_reliability_summary(runs: List[Dict[str, Any]]) -> Dict[str, float
             "coverage_stability": 0.0,
             "latency_stability": 0.0,
             "reliability_score": 0.0,
+            "sample_size": 0,
+            "reliability_note": "no runs",
         }
 
     run_count = len(runs)
@@ -284,6 +286,7 @@ def calculate_reliability_summary(runs: List[Dict[str, Any]]) -> Dict[str, float
     schema_valid_rate = round((schema_valid_runs / run_count) * 100.0, 2)
     stability_score = round((count_stability + coverage_stability + latency_stability) / 3.0, 2)
     reliability_score = round((success_rate + schema_valid_rate + stability_score) / 3.0, 2)
+    reliability_note = "provisional (<3 runs)" if run_count < 3 else "stability estimated"
 
     return {
         "success_rate": success_rate,
@@ -292,12 +295,15 @@ def calculate_reliability_summary(runs: List[Dict[str, Any]]) -> Dict[str, float
         "coverage_stability": coverage_stability,
         "latency_stability": latency_stability,
         "reliability_score": reliability_score,
+        "sample_size": run_count,
+        "reliability_note": reliability_note,
     }
 
 
 def format_benchmark_results(name: str, metrics: Dict) -> str:
     """Format metrics for display."""
     return (
+        f"[{metrics.get('evaluation_mode', 'unknown')}] "
         f"[{name}] Extracted: {metrics.get('extracted_count', 0)} | "
         f"Accuracy: {metrics.get('accuracy', 0):.2f}% | "
         f"F1: {metrics.get('record_f1', 0):.2f}% | "

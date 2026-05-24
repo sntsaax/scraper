@@ -297,6 +297,9 @@ def run_single_extraction(
     result_record.update(cost_metrics)
     result_record["site_expected_records"] = site.expected_record_count if site.expected_record_count is not None else ""
     result_record["site_ground_truth_file"] = site.ground_truth_file
+    result_record["ground_truth_count"] = len(ground_truth)
+    result_record["evaluation_mode"] = "controlled" if ground_truth else "live_analysis"
+    result_record["supervised_metrics_available"] = bool(ground_truth)
 
     schema_valid = False
     if parsed_data is not None:
@@ -360,6 +363,7 @@ def run_single_extraction(
         "latency_seconds": result_record["latency_seconds"],
         "estimated_cost_usd": result_record["estimated_cost_usd"],
         "failure_type": failure_type,
+        "evaluation_mode": result_record["evaluation_mode"],
     }
     logger.info(format_benchmark_results(scraper_name, display_metrics))
 
@@ -401,6 +405,10 @@ def run_all_benchmarks() -> List[Dict[str, Any]]:
         logger.info(f"\n{'#'*80}")
         logger.info(f"# SITE: {site.name.upper()}")
         logger.info(f"# GROUND TRUTH RECORDS: {len(ground_truth)}")
+        if ground_truth:
+            logger.info(f"# EVALUATION MODE: controlled (supervised metrics enabled)")
+        else:
+            logger.info(f"# EVALUATION MODE: live_analysis (no labels; supervised metrics disabled)")
         logger.info(f"{'#'*80}\n")
 
         for scraper_name, scraper in SCRAPERS.items():
@@ -422,6 +430,8 @@ def run_all_benchmarks() -> List[Dict[str, Any]]:
                             "site": site.name,
                             "site_url": site.url,
                             "benchmark_url": site.benchmark_url(),
+                            "ground_truth_count": len(ground_truth),
+                            "evaluation_mode": "controlled" if ground_truth else "live_analysis",
                             "run_id": run_id,
                             "timestamp": datetime.now().isoformat(),
                             "extracted_count": 0,
@@ -448,6 +458,8 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
             {
                 "site": result.get("site", "unknown"),
                 "system": result.get("system", "unknown"),
+                "evaluation_mode": result.get("evaluation_mode", "unknown"),
+                "ground_truth_count": 0,
                 "runs": 0,
                 "accuracy_avg": 0.0,
                 "record_precision_avg": 0.0,
@@ -469,6 +481,8 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     for key, payload in grouped.items():
         runs = [result for result in all_results if f"{result.get('site', 'unknown')}::{result.get('system', 'unknown')}" == key]
         payload["runs"] = len(runs)
+        payload["evaluation_mode"] = runs[0].get("evaluation_mode", "unknown") if runs else "unknown"
+        payload["ground_truth_count"] = int(runs[0].get("ground_truth_count", 0) or 0) if runs else 0
         payload["accuracy_avg"] = round(sum(item.get("accuracy", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
         payload["record_precision_avg"] = round(sum(item.get("record_precision", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
         payload["record_recall_avg"] = round(sum(item.get("record_recall", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
@@ -485,6 +499,8 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload["count_stability"] = reliability["count_stability"]
         payload["coverage_stability"] = reliability["coverage_stability"]
         payload["latency_stability"] = reliability["latency_stability"]
+        payload["reliability_sample_size"] = reliability["sample_size"]
+        payload["reliability_note"] = reliability["reliability_note"]
 
     return {
         "generated_at": datetime.now().isoformat(),
@@ -504,6 +520,8 @@ def save_summary_csv(all_results: List[Dict[str, Any]]) -> str:
     csv_columns = [
         "system",
         "site",
+        "evaluation_mode",
+        "ground_truth_count",
         "site_url",
         "benchmark_url",
         "run_id",
@@ -586,6 +604,8 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
         costs = [r.get("estimated_cost_usd", 0.0) for r in runs]
 
         logger.info(f"  Runs: {len(runs)}")
+        logger.info(f"  Evaluation mode: {runs[0].get('evaluation_mode', 'unknown') if runs else 'unknown'}")
+        logger.info(f"  Ground truth labels: {runs[0].get('ground_truth_count', 0) if runs else 0}")
         logger.info(f"  Extracted (avg/min/max): {sum(extracted_counts)/len(extracted_counts):.1f} / "
                    f"{min(extracted_counts)}/{max(extracted_counts)}")
         logger.info(f"  Accuracy (avg): {sum(accuracies)/len(accuracies):.2f}%")
@@ -595,7 +615,7 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
         logger.info(f"  Coverage (avg): {sum(coverages)/len(coverages):.2f}%")
         logger.info(f"  Schema Valid: {sum(schema_valids)}/{len(schema_valids)}")
         reliability = calculate_reliability_summary(runs)
-        logger.info(f"  Reliability: {reliability['reliability_score']:.2f}%")
+        logger.info(f"  Reliability: {reliability['reliability_score']:.2f}% (n={reliability['sample_size']}; {reliability['reliability_note']})")
         logger.info(f"  Success Rate: {reliability['success_rate']:.2f}%")
         logger.info(f"  Cost (avg): ${sum(costs)/len(costs):.4f}")
         if latencies:
