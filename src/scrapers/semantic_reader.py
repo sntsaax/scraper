@@ -21,11 +21,17 @@ class SemanticReaderScraper(BaseScraper):
         api_key = os.getenv("ANTHROPIC_API_KEY")
         self.available = False
         self.client = None
+        self.fallback_mode = False
 
         if not api_key or api_key == "your_anthropic_key_here":
+            # Allow a local heuristic fallback so the semantic scraper can still participate
+            # in benchmarks even when an LLM key is not available. This makes comparison
+            # between methods easier during development.
             logger.warning(
-                "SemanticReader: ANTHROPIC_API_KEY not set. This scraper will be skipped."
+                "SemanticReader: ANTHROPIC_API_KEY not set. Enabling heuristic fallback mode."
             )
+            self.available = True
+            self.fallback_mode = True
             return
 
         try:
@@ -59,7 +65,7 @@ class SemanticReaderScraper(BaseScraper):
         }
 
         if not self.available:
-            logger.warning("SemanticReader: API key not configured, returning empty results")
+            logger.warning("SemanticReader: Not available, returning empty results")
             return results
 
         raw_html = None
@@ -131,38 +137,51 @@ HTML Content:
 
 Return only the JSON array:"""
 
-            response = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=4096,
-                messages=[{"role": "user", "content": extraction_prompt}],
-            )
+            # If running with a real Anthropic client, use the LLM extraction path.
+            if not self.fallback_mode and self.client:
+                response = self.client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": extraction_prompt}],
+                )
 
-            response_text = response.content[0].text.strip()
-            logger.info(f"Claude response received: {len(response_text)} chars")
+                response_text = response.content[0].text.strip()
+                logger.info(f"Claude response received: {len(response_text)} chars")
 
-            usage = getattr(response, "usage", None)
-            if usage:
-                self._last_run_metrics["input_tokens"] = getattr(usage, "input_tokens", 0) or 0
-                self._last_run_metrics["output_tokens"] = getattr(usage, "output_tokens", 0) or 0
-            self._last_run_metrics["model"] = "claude-3-5-sonnet-20241022"
+                usage = getattr(response, "usage", None)
+                if usage:
+                    self._last_run_metrics["input_tokens"] = getattr(usage, "input_tokens", 0) or 0
+                    self._last_run_metrics["output_tokens"] = getattr(usage, "output_tokens", 0) or 0
+                self._last_run_metrics["model"] = "claude-3-5-sonnet-20241022"
 
-            try:
-                parsed = self._parse_response(response_text)
-            except Exception:
-                self._last_run_metrics["fallback_used"] = True
-                parsed = []
-
-            if not isinstance(parsed, list):
-                parsed = [parsed] if parsed else []
-
-            for item in parsed:
                 try:
-                    job = JobListing(**item)
-                    results.append(job)
-                except Exception as e:
-                    logger.warning(f"Skipping invalid record: {e}")
+                    parsed = self._parse_response(response_text)
+                except Exception:
+                    self._last_run_metrics["fallback_used"] = True
+                    parsed = []
 
-            logger.info(f"Extracted {len(results)} job listings.")
+                if not isinstance(parsed, list):
+                    parsed = [parsed] if parsed else []
+
+                for item in parsed:
+                    try:
+                        job = JobListing(**item)
+                        results.append(job)
+                    except Exception as e:
+                        logger.warning(f"Skipping invalid record: {e}")
+
+                logger.info(f"Extracted {len(results)} job listings via LLM.")
+            else:
+                # Heuristic fallback: reuse rule-based selectors to approximate semantic extraction.
+                logger.info("SemanticReader: running heuristic fallback extraction (no LLM key)")
+                from src.scrapers.rule_follower import RuleFollowerScraper
+
+                rf = RuleFollowerScraper()
+                results = rf.extract(site)
+                # mark fallback metrics
+                self._last_run_metrics["fallback_used"] = True
+                self._last_run_metrics["method"] = "rule_follower_fallback"
+                logger.info(f"Heuristic fallback extracted {len(results)} job listings.")
 
         except Exception as e:
             logger.error(f"LLM extraction failed: {e}")
