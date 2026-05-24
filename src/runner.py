@@ -669,11 +669,14 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
         rec_avg = _average_non_null(recalls)
         f1_avg = _average_non_null(f1_scores)
         cov_avg = _average_non_null(coverages)
-        logger.info(f"  Accuracy (avg): {acc_avg if acc_avg is not None else 'N/A'}")
-        logger.info(f"  Precision (avg): {prec_avg if prec_avg is not None else 'N/A'}")
-        logger.info(f"  Recall (avg): {rec_avg if rec_avg is not None else 'N/A'}")
-        logger.info(f"  F1 (avg): {f1_avg if f1_avg is not None else 'N/A'}")
-        logger.info(f"  Coverage (avg): {cov_avg if cov_avg is not None else 'N/A'}")
+
+        supervised = True if runs and (runs[0].get('ground_truth_count', 0) or runs[0].get('evaluation_mode') == 'controlled') else False
+
+        logger.info(f"  Accuracy (avg): {_display_metric_percent(acc_avg, supervised)}")
+        logger.info(f"  Precision (avg): {_display_metric_percent(prec_avg, supervised)}")
+        logger.info(f"  Recall (avg): {_display_metric_percent(rec_avg, supervised)}")
+        logger.info(f"  F1 (avg): {_display_metric_percent(f1_avg, supervised)}")
+        logger.info(f"  Coverage (avg): {_display_metric_percent(cov_avg, supervised)}")
         logger.info(f"  Schema Valid: {sum(schema_valids)}/{len(schema_valids)}")
         reliability = calculate_reliability_summary(runs)
         logger.info(f"  Reliability: {reliability['reliability_score']:.2f}% (n={reliability['sample_size']}; {reliability['reliability_note']})")
