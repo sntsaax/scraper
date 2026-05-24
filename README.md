@@ -6,9 +6,17 @@ This project benchmarks three extraction strategies for dynamic job listings:
 * a semantic LLM-based extractor,
 * an autonomous browser-agent style scraper.
 
-The benchmark is profile-driven, so it can scale from the current Mellby Gård careers page to additional zero-shot site profiles without rewriting the runner. The current setup includes three layouts: one live site and two local fixtures that exercise different DOM structures.
+The benchmark is profile-driven, so it can scale from the current Mellby Gård careers page to additional zero-shot site profiles without rewriting the runner. The default profile set now points at three live public job boards: Mellby Gård, Datadog, and Webflow.
 
 Site profiles are loaded from `data/site_profiles.json` by default. Set `BENCHMARK_SITE_PROFILES` if you want to point to another profile file.
+
+If you want to analyze a different live site without editing profile JSON, use the new single-URL mode:
+
+```bash
+python -m src.runner --site-url https://careers.datadoghq.com/all-jobs/ --site-name datadog_all_jobs --company-name Datadog
+```
+
+Pass `--item-selector`, `--title-selector`, and `--location-selector` when a site needs custom card selectors.
 
 ## Run
 

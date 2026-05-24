@@ -62,6 +62,71 @@ NUM_RUNS = int(os.getenv("NUM_RUNS", "5"))
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the thesis benchmark suite.")
     parser.add_argument(
+        "--site-url",
+        default="",
+        help="Analyze a single live site URL instead of loading profiles from disk.",
+    )
+    parser.add_argument(
+        "--site-name",
+        default="live_site",
+        help="Name to use for a --site-url run.",
+    )
+    parser.add_argument(
+        "--company-name",
+        default="Live Site",
+        help="Company name to use for a --site-url run.",
+    )
+    parser.add_argument(
+        "--ground-truth-file",
+        default="",
+        help="Optional ground-truth JSON file for a --site-url run.",
+    )
+    parser.add_argument(
+        "--local-html-file",
+        default=None,
+        help="Optional local HTML file to analyze instead of a live URL.",
+    )
+    parser.add_argument(
+        "--item-selector",
+        action="append",
+        default=[],
+        help="Repeatable selector override for job cards when using --site-url.",
+    )
+    parser.add_argument(
+        "--title-selector",
+        default="",
+        help="Optional title selector override for a --site-url run.",
+    )
+    parser.add_argument(
+        "--location-selector",
+        default="",
+        help="Optional location selector override for a --site-url run.",
+    )
+    parser.add_argument(
+        "--cookie-selector",
+        action="append",
+        default=[],
+        help="Repeatable cookie-banner selector override for a --site-url run.",
+    )
+    parser.add_argument(
+        "--semantic-max-chars",
+        type=int,
+        default=12000,
+        help="Maximum characters sent to the semantic scraper for a --site-url run.",
+    )
+    parser.add_argument(
+        "--max-scrolls",
+        type=int,
+        default=1,
+        help="Maximum scroll iterations for a --site-url run.",
+    )
+    parser.add_argument(
+        "--expected-record-count",
+        type=int,
+        default=None,
+        help="Optional expected count for a --site-url run.",
+    )
+    parser.add_argument(
         "--runs",
         type=int,
         default=NUM_RUNS,
@@ -84,6 +149,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def load_ground_truth(ground_truth_file: str) -> List[Dict[str, Any]]:
     """Load and return the reference ground truth dataset for one site."""
+    if not ground_truth_file:
+        return []
+
     try:
         with open(ground_truth_file, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -129,6 +197,47 @@ def select_scrapers(scrapers: Dict[str, Any], allowed_names: Sequence[str]) -> D
         return scrapers
     allowed = {name.strip() for name in allowed_names if name.strip()}
     return {name: scraper for name, scraper in scrapers.items() if name in allowed}
+
+
+def _selector_tuple(values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(value.strip() for value in values if value and value.strip())
+
+
+def build_live_site_profile(args: argparse.Namespace) -> SiteProfile:
+    item_selectors = _selector_tuple(args.item_selector) or (
+        "a[href*='/detail/']",
+        "a[href*='/jobs/']",
+        "a[href*='/positions/']",
+        "li[class*='job']",
+        "article",
+        "li",
+    )
+    title_selector = args.title_selector or "h1, h2, h3, .job-card-title h3, .title, .job-title"
+    location_selector = (
+        args.location_selector
+        or ".job-card-location p, .location, [data-location], p:last-of-type"
+    )
+    cookie_selectors = _selector_tuple(args.cookie_selector) or (
+        "button:has-text('Accept all')",
+        "button:has-text('Accept')",
+        "button:has-text('Agree')",
+        "button:has-text('Reject all')",
+    )
+
+    return SiteProfile(
+        name=args.site_name,
+        url=args.site_url,
+        ground_truth_file=args.ground_truth_file or "",
+        local_html_file=args.local_html_file,
+        company_name=args.company_name,
+        item_selectors=item_selectors,
+        title_selector=title_selector,
+        location_selector=location_selector,
+        cookie_selectors=cookie_selectors,
+        semantic_max_chars=args.semantic_max_chars,
+        max_scrolls=max(1, args.max_scrolls),
+        expected_record_count=args.expected_record_count,
+    )
 
 
 def run_single_extraction(
@@ -501,7 +610,10 @@ def main(argv: Optional[Sequence[str]] = None):
     args = parse_args(argv)
     logger.info(f"Starting benchmark at {datetime.now()}")
 
-    site_profiles = select_site_profiles(load_site_profiles(), args.sites)
+    if args.site_url:
+        site_profiles = [build_live_site_profile(args)]
+    else:
+        site_profiles = select_site_profiles(load_site_profiles(), args.sites)
     scrapers = select_scrapers(SCRAPERS, args.scrapers)
 
     global NUM_RUNS
