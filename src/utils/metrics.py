@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 import json
-from statistics import mean, pstdev
+from statistics import mean, pstdev, median
 from src.schemas import JobListing
 
 
@@ -234,6 +234,74 @@ def detect_duplicates(results: List[Dict[str, Any]]) -> List[int]:
     return duplicate_indices
 
 
+def compute_unsupervised_quality(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Compute heuristic quality indicators when no ground-truth is available.
+    Returns schema_completeness_score (0-100), duplicate_rate (0-100),
+    url_completeness_ratio (0-100), title_length_median, and a combined
+    heuristic_quality_score (0-100).
+    """
+    if not results:
+        return {
+            "schema_completeness_score": 0.0,
+            "duplicate_rate": 0.0,
+            "url_completeness_ratio": 0.0,
+            "title_length_median": 0.0,
+            "heuristic_quality_score": 0.0,
+        }
+
+    required_fields = ["title", "company", "location", "url"]
+    completeness_scores = []
+    url_complete = 0
+    title_lengths = []
+    urls_seen = set()
+    duplicates = 0
+
+    for item in results:
+        present = sum(1 for f in required_fields if item.get(f))
+        completeness_scores.append((present / len(required_fields)) * 100.0)
+        url = item.get("url") or ""
+        if url.startswith("http"):
+            url_complete += 1
+        if item.get("title"):
+            title_lengths.append(len(item.get("title")))
+        if url:
+            if url in urls_seen:
+                duplicates += 1
+            else:
+                urls_seen.add(url)
+
+    schema_completeness_score = round(mean(completeness_scores), 2) if completeness_scores else 0.0
+    url_completeness_ratio = round((url_complete / len(results)) * 100.0, 2)
+    duplicate_rate = round((duplicates / len(results)) * 100.0, 2)
+    title_length_median = float(median(title_lengths)) if title_lengths else 0.0
+
+    # Normalize title median into 0-100 where 20-100 chars is ideal.
+    if title_length_median <= 0:
+        title_score = 0.0
+    else:
+        ideal_low, ideal_high = 20.0, 100.0
+        clamped = max(0.0, min(title_length_median, ideal_high))
+        title_score = ((clamped - ideal_low) / (ideal_high - ideal_low)) * 100.0
+        title_score = max(0.0, min(title_score, 100.0))
+
+    # Heuristic composite: weights (schema:0.45, url:0.2, duplicates inverse:0.15, title:0.2)
+    heuristic_quality_score = (
+        0.45 * schema_completeness_score
+        + 0.2 * url_completeness_ratio
+        + 0.15 * (100.0 - duplicate_rate)
+        + 0.2 * title_score
+    )
+
+    return {
+        "schema_completeness_score": round(schema_completeness_score, 2),
+        "duplicate_rate": duplicate_rate,
+        "url_completeness_ratio": url_completeness_ratio,
+        "title_length_median": round(title_length_median, 2),
+        "heuristic_quality_score": round(heuristic_quality_score, 2),
+    }
+
+
 def _bounded_stability(values: List[float]) -> float:
     """Convert a series into a 0-100 stability score where higher is steadier."""
     clean_values = [value for value in values if value is not None]
@@ -302,16 +370,25 @@ def calculate_reliability_summary(runs: List[Dict[str, Any]]) -> Dict[str, float
 
 def format_benchmark_results(name: str, metrics: Dict) -> str:
     """Format metrics for display."""
+    def _fmt_pct(val):
+        try:
+            return f"{float(val):.2f}%" if val is not None else "N/A"
+        except Exception:
+            return "N/A"
+
+    heuristic = metrics.get("heuristic_quality_score")
+    heuristic_str = f" | HeuristicQuality: {heuristic:.2f}%" if heuristic is not None else ""
+
     return (
         f"[{metrics.get('evaluation_mode', 'unknown')}] "
         f"[{name}] Extracted: {metrics.get('extracted_count', 0)} | "
-        f"Accuracy: {metrics.get('accuracy', 0):.2f}% | "
-        f"F1: {metrics.get('record_f1', 0):.2f}% | "
-        f"Coverage: {metrics.get('record_coverage', 0):.2f}% | "
+        f"Accuracy: {_fmt_pct(metrics.get('accuracy'))} | "
+        f"F1: {_fmt_pct(metrics.get('record_f1'))} | "
+        f"Coverage: {_fmt_pct(metrics.get('record_coverage'))} | "
         f"Schema Valid: {metrics.get('schema_valid', False)} | "
         f"Latency: {metrics.get('latency_seconds', 0):.2f}s | "
-        f"Reliability: {metrics.get('reliability_score', 0):.2f}% | "
+        f"Reliability: {_fmt_pct(metrics.get('reliability_score'))} | "
         f"Cost: ${metrics.get('estimated_cost_usd', 0):.4f} | "
-        f"Failure: {metrics.get('failure_type', 'unknown')}"
+        f"Failure: {metrics.get('failure_type', 'unknown')}{heuristic_str}"
     )
 

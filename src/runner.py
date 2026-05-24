@@ -27,6 +27,7 @@ from src.utils.metrics import (
     detect_unsupported_records,
     detect_duplicates,
     format_benchmark_results,
+    compute_unsupervised_quality,
 )
 from src.utils.logger import get_logger
 
@@ -133,6 +134,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Number of runs per scraper and site.",
     )
     parser.add_argument(
+        "--monthly-runs",
+        type=int,
+        default=20,
+        help="Number of operational runs per month used to estimate monthly cost (for reporting).",
+    )
+    parser.add_argument(
         "--sites",
         nargs="*",
         default=[],
@@ -180,13 +187,25 @@ def estimate_cost_usd(scraper_name: str, run_metrics: Dict[str, Any], latency_se
     browser_cost = (max(latency_seconds, 0.0) / 3600.0) * browser_rate
     estimated_cost = token_cost + browser_cost
 
+    # Maintenance cost estimation (optional): allow company to report hourly maintenance in SEK
+    maintenance_hourly_sek = float(os.getenv("MAINTENANCE_HOURLY_SEK", "0"))
+    maintenance_hours_per_month = float(os.getenv("MAINTENANCE_HOURS_PER_MONTH", "0"))
+    exchange_sek_to_usd = float(os.getenv("EXCHANGE_RATE_SEK_TO_USD", "0.093"))
+
+    maintenance_monthly_usd = maintenance_hourly_sek * maintenance_hours_per_month * exchange_sek_to_usd
+
     return {
         "estimated_cost_usd": round(estimated_cost, 6),
         "cost_model": "env_rate" if (browser_env or input_env or output_env) else "env_rate_with_fallback",
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "scraper_cost_profile": scraper_name,
+        "maintenance_hourly_sek": maintenance_hourly_sek,
+        "maintenance_hours_per_month": maintenance_hours_per_month,
+        "maintenance_monthly_usd": round(maintenance_monthly_usd, 2),
+        "exchange_sek_to_usd": exchange_sek_to_usd,
     }
+
 
 
 def _display_metric_percent(value: Any, supervised: bool) -> str:
@@ -347,6 +366,12 @@ def run_single_extraction(
         result_record["record_f1"] = None
         result_record["exact_record_matches"] = None
 
+    # If no ground truth is provided, compute unsupervised heuristic quality indicators
+    unsupervised_metrics = {}
+    if not ground_truth and parsed_data:
+        unsupervised_metrics = compute_unsupervised_quality(parsed_data)
+        result_record.update(unsupervised_metrics)
+
     unsupported_indices = []
     duplicate_indices = []
 
@@ -385,6 +410,7 @@ def run_single_extraction(
         "failure_type": failure_type,
         "evaluation_mode": result_record["evaluation_mode"],
         "supervised_metrics_available": result_record["supervised_metrics_available"],
+        "heuristic_quality_score": result_record.get("heuristic_quality_score"),
     }
     logger.info(format_benchmark_results(scraper_name, display_metrics))
 
@@ -395,6 +421,7 @@ def run_single_extraction(
             "raw_output": parsed_data,
             "scraper_metrics": run_metrics,
             "ground_truth_sample": ground_truth[:3] if ground_truth else [],
+            "unsupervised_metrics": unsupervised_metrics,
         }
         with open(run_file, "w", encoding="utf-8") as f:
             json.dump(detailed_log, f, indent=2, ensure_ascii=False)
@@ -512,6 +539,13 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         positive_latencies = [item.get("latency_seconds", 0.0) for item in runs if item.get("latency_seconds", -1) > 0]
         payload["latency_avg"] = round(sum(positive_latencies) / len(positive_latencies), 2) if positive_latencies else 0.0
         payload["cost_avg"] = round(sum(item.get("estimated_cost_usd", 0.0) for item in runs) / len(runs), 6) if runs else 0.0
+        payload["maintenance_monthly_usd_avg"] = round(sum(item.get("maintenance_monthly_usd", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
+        # Monthly operational cost = per-run avg cost * configured monthly runs + avg maintenance
+        try:
+            monthly_runs = int(os.getenv("MONTHLY_RUNS_OVERRIDE", "0")) or globals().get("MONTHLY_RUNS", 0)
+        except Exception:
+            monthly_runs = 0
+        payload["monthly_operational_cost_estimate_usd"] = round((payload["cost_avg"] * monthly_runs) + payload["maintenance_monthly_usd_avg"], 2)
         payload["schema_valid_rate"] = round(sum(1 for item in runs if item.get("schema_valid", False)) / len(runs) * 100, 2) if runs else 0.0
         payload["extracted_avg"] = round(sum(item.get("extracted_count", 0) for item in runs) / len(runs), 2) if runs else 0.0
         reliability = calculate_reliability_summary(runs)
@@ -526,6 +560,7 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "generated_at": datetime.now().isoformat(),
         "results_count": len(all_results),
+        "monthly_runs_used": globals().get("MONTHLY_RUNS", 0),
         "systems": grouped,
     }
 
@@ -664,6 +699,8 @@ def main(argv: Optional[Sequence[str]] = None):
 
     global NUM_RUNS
     NUM_RUNS = max(1, args.runs)
+    global MONTHLY_RUNS
+    MONTHLY_RUNS = max(0, int(args.monthly_runs or 0))
 
     all_results = []
     logger.info(f"Selected sites: {[site.name for site in site_profiles]}")
