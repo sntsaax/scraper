@@ -13,11 +13,25 @@ with open(SUMMARY, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 systems = data.get("systems", {})
-labels = []
-costs = []
-for key, info in systems.items():
-    labels.append(f"{info.get('site')}::{info.get('system')}")
-    costs.append(info.get("monthly_operational_cost_estimate_usd", 0.0))
+site_order = ["mellby_gaard_careers", "datadog_all_jobs", "webflow_jobs", "fixture_marketing_jobs"]
+site_labels = {
+    "mellby_gaard_careers": "Mellby Gård",
+    "datadog_all_jobs": "Datadog",
+    "webflow_jobs": "Webflow",
+    "fixture_marketing_jobs": "Fixture benchmark",
+}
+
+ordered_items = sorted(
+    systems.items(),
+    key=lambda item: (
+        site_order.index(item[1].get("site")) if item[1].get("site") in site_order else len(site_order),
+        item[1].get("site", ""),
+        item[1].get("system", ""),
+    ),
+)
+
+labels = [f"{site_labels.get(info.get('site'), info.get('site'))}::{info.get('system')}" for _, info in ordered_items]
+costs = [info.get("monthly_operational_cost_estimate_usd", 0.0) for _, info in ordered_items]
 
 if not labels:
     print("No systems found in summary.")

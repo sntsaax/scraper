@@ -33,6 +33,20 @@ from src.utils.logger import get_logger
 
 logger = get_logger("Runner")
 
+SITE_DISPLAY_ORDER = [
+    "mellby_gaard_careers",
+    "datadog_all_jobs",
+    "webflow_jobs",
+    "fixture_marketing_jobs",
+]
+
+SITE_DISPLAY_LABELS = {
+    "mellby_gaard_careers": "Mellby Gård",
+    "datadog_all_jobs": "Datadog",
+    "webflow_jobs": "Webflow",
+    "fixture_marketing_jobs": "Fixture benchmark",
+}
+
 
 # Ensure results directory exists
 RESULTS_DIR = Path("data/results")
@@ -222,6 +236,19 @@ def _average_non_null(values: List[Any]) -> Optional[float]:
     if not clean_values:
         return None
     return round(sum(clean_values) / len(clean_values), 2)
+
+
+def _site_sort_key(result: Dict[str, Any]) -> tuple[int, str, str]:
+    site = result.get("site", "unknown")
+    system = result.get("system", "unknown")
+    try:
+        return (SITE_DISPLAY_ORDER.index(site), site, system)
+    except ValueError:
+        return (len(SITE_DISPLAY_ORDER), site, system)
+
+
+def _pretty_site_name(site: str) -> str:
+    return SITE_DISPLAY_LABELS.get(site, site)
 
 
 def select_site_profiles(site_profiles: List[SiteProfile], allowed_names: Sequence[str]) -> List[SiteProfile]:
@@ -499,7 +526,7 @@ def run_all_benchmarks() -> List[Dict[str, Any]]:
 
 def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     grouped: Dict[str, Dict[str, Any]] = {}
-    for result in all_results:
+    for result in sorted(all_results, key=_site_sort_key):
         key = f"{result.get('site', 'unknown')}::{result.get('system', 'unknown')}"
         grouped.setdefault(
             key,
@@ -561,7 +588,7 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "generated_at": datetime.now().isoformat(),
         "results_count": len(all_results),
         "monthly_runs_used": globals().get("MONTHLY_RUNS", 0),
-        "systems": grouped,
+        "systems": dict(sorted(grouped.items(), key=lambda item: _site_sort_key(item[1]))),
     }
 
 
@@ -603,7 +630,7 @@ def save_summary_csv(all_results: List[Dict[str, Any]]) -> str:
             writer = csv.DictWriter(f, fieldnames=csv_columns)
             writer.writeheader()
 
-            for result in all_results:
+            for result in sorted(all_results, key=_site_sort_key):
                 # Filter to only CSV columns, use defaults for missing
                 row = {col: result.get(col, "") for col in csv_columns}
                 writer.writerow(row)
@@ -646,7 +673,9 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
     # Print stats per system
     for system in sorted(by_system.keys()):
         runs = by_system[system]
-        logger.info(f"\n{system.upper()}:")
+        site_name = system.split("::", 1)[0]
+        display_site = _pretty_site_name(site_name)
+        logger.info(f"\n{display_site} / {system.split('::', 1)[1].upper()}:")
         logger.info("-" * 40)
 
         extracted_counts = [r.get("extracted_count", 0) for r in runs]

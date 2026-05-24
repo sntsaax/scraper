@@ -14,16 +14,32 @@ with open(SUMMARY, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 systems = data.get("systems", {})
-keys = list(systems.keys())
-labels = [f"{v.get('site')}\n{v.get('system')}" for k, v in systems.items()]
+site_order = ["mellby_gaard_careers", "datadog_all_jobs", "webflow_jobs", "fixture_marketing_jobs"]
+site_labels = {
+    "mellby_gaard_careers": "Mellby Gård",
+    "datadog_all_jobs": "Datadog",
+    "webflow_jobs": "Webflow",
+    "fixture_marketing_jobs": "Fixture benchmark",
+}
+
+ordered_items = sorted(
+    systems.items(),
+    key=lambda item: (
+        site_order.index(item[1].get("site")) if item[1].get("site") in site_order else len(site_order),
+        item[1].get("site", ""),
+        item[1].get("system", ""),
+    ),
+)
+
+labels = [f"{site_labels.get(v.get('site'), v.get('site'))}\n{v.get('system')}" for _, v in ordered_items]
 
 # gather metrics
-extracted = [v.get('extracted_avg', 0.0) for v in systems.values()]
-latency = [v.get('latency_avg', 0.0) for v in systems.values()]
-cost = [v.get('cost_avg', 0.0) for v in systems.values()]
-heuristic = [v.get('heuristic_quality_score', None) for v in systems.values()]
-schema_valid_rate = [v.get('schema_valid_rate', 0.0) for v in systems.values()]
-accuracy = [v.get('accuracy_avg', None) for v in systems.values()]
+extracted = [v.get('extracted_avg', 0.0) for _, v in ordered_items]
+latency = [v.get('latency_avg', 0.0) for _, v in ordered_items]
+cost = [v.get('cost_avg', 0.0) for _, v in ordered_items]
+heuristic = [v.get('heuristic_quality_score', None) for _, v in ordered_items]
+schema_valid_rate = [v.get('schema_valid_rate', 0.0) for _, v in ordered_items]
+accuracy = [v.get('accuracy_avg', None) for _, v in ordered_items]
 
 # Utility to plot bar with labels
 
