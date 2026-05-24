@@ -165,9 +165,13 @@ def load_ground_truth(ground_truth_file: str) -> List[Dict[str, Any]]:
 
 def estimate_cost_usd(scraper_name: str, run_metrics: Dict[str, Any], latency_seconds: float) -> Dict[str, Any]:
     """Estimate run cost using environment-configured rates."""
-    browser_rate = float(os.getenv("BROWSER_RUNTIME_COST_PER_HOUR_USD", "0"))
-    input_rate = float(os.getenv("ANTHROPIC_INPUT_COST_PER_1K_TOKENS", "0"))
-    output_rate = float(os.getenv("ANTHROPIC_OUTPUT_COST_PER_1K_TOKENS", "0"))
+    browser_env = os.getenv("BROWSER_RUNTIME_COST_PER_HOUR_USD")
+    input_env = os.getenv("ANTHROPIC_INPUT_COST_PER_1K_TOKENS")
+    output_env = os.getenv("ANTHROPIC_OUTPUT_COST_PER_1K_TOKENS")
+
+    browser_rate = float(browser_env or "0.75")
+    input_rate = float(input_env or "0.003")
+    output_rate = float(output_env or "0.015")
 
     input_tokens = int(run_metrics.get("input_tokens", 0) or 0)
     output_tokens = int(run_metrics.get("output_tokens", 0) or 0)
@@ -178,11 +182,27 @@ def estimate_cost_usd(scraper_name: str, run_metrics: Dict[str, Any], latency_se
 
     return {
         "estimated_cost_usd": round(estimated_cost, 6),
-        "cost_model": "env_rate" if (browser_rate or input_rate or output_rate) else "unconfigured",
+        "cost_model": "env_rate" if (browser_env or input_env or output_env) else "env_rate_with_fallback",
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "scraper_cost_profile": scraper_name,
     }
+
+
+def _display_metric_percent(value: Any, supervised: bool) -> str:
+    if value is None:
+        return "N/A" if not supervised else "0.00%"
+    try:
+        return f"{float(value):.2f}%"
+    except Exception:
+        return "N/A"
+
+
+def _average_non_null(values: List[Any]) -> Optional[float]:
+    clean_values = [float(value) for value in values if value is not None]
+    if not clean_values:
+        return None
+    return round(sum(clean_values) / len(clean_values), 2)
 
 
 def select_site_profiles(site_profiles: List[SiteProfile], allowed_names: Sequence[str]) -> List[SiteProfile]:
@@ -320,12 +340,12 @@ def run_single_extraction(
         result_record.update(record_summary)
         logger.info(f"Field-level accuracy: {accuracy:.2f}%")
     else:
-        result_record["accuracy"] = 0.0
-        result_record["record_coverage"] = 0.0
-        result_record["record_precision"] = 0.0
-        result_record["record_recall"] = 0.0
-        result_record["record_f1"] = 0.0
-        result_record["exact_record_matches"] = 0.0
+        result_record["accuracy"] = None
+        result_record["record_coverage"] = None
+        result_record["record_precision"] = None
+        result_record["record_recall"] = None
+        result_record["record_f1"] = None
+        result_record["exact_record_matches"] = None
 
     unsupported_indices = []
     duplicate_indices = []
@@ -364,6 +384,7 @@ def run_single_extraction(
         "estimated_cost_usd": result_record["estimated_cost_usd"],
         "failure_type": failure_type,
         "evaluation_mode": result_record["evaluation_mode"],
+        "supervised_metrics_available": result_record["supervised_metrics_available"],
     }
     logger.info(format_benchmark_results(scraper_name, display_metrics))
 
@@ -483,11 +504,11 @@ def build_summary(all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload["runs"] = len(runs)
         payload["evaluation_mode"] = runs[0].get("evaluation_mode", "unknown") if runs else "unknown"
         payload["ground_truth_count"] = int(runs[0].get("ground_truth_count", 0) or 0) if runs else 0
-        payload["accuracy_avg"] = round(sum(item.get("accuracy", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
-        payload["record_precision_avg"] = round(sum(item.get("record_precision", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
-        payload["record_recall_avg"] = round(sum(item.get("record_recall", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
-        payload["record_f1_avg"] = round(sum(item.get("record_f1", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
-        payload["coverage_avg"] = round(sum(item.get("record_coverage", 0.0) for item in runs) / len(runs), 2) if runs else 0.0
+        payload["accuracy_avg"] = _average_non_null([item.get("accuracy") for item in runs]) or 0.0
+        payload["record_precision_avg"] = _average_non_null([item.get("record_precision") for item in runs]) or 0.0
+        payload["record_recall_avg"] = _average_non_null([item.get("record_recall") for item in runs]) or 0.0
+        payload["record_f1_avg"] = _average_non_null([item.get("record_f1") for item in runs]) or 0.0
+        payload["coverage_avg"] = _average_non_null([item.get("record_coverage") for item in runs]) or 0.0
         positive_latencies = [item.get("latency_seconds", 0.0) for item in runs if item.get("latency_seconds", -1) > 0]
         payload["latency_avg"] = round(sum(positive_latencies) / len(positive_latencies), 2) if positive_latencies else 0.0
         payload["cost_avg"] = round(sum(item.get("estimated_cost_usd", 0.0) for item in runs) / len(runs), 6) if runs else 0.0
@@ -594,11 +615,11 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
         logger.info("-" * 40)
 
         extracted_counts = [r.get("extracted_count", 0) for r in runs]
-        accuracies = [r.get("accuracy", 0.0) for r in runs]
-        precisions = [r.get("record_precision", 0.0) for r in runs]
-        recalls = [r.get("record_recall", 0.0) for r in runs]
-        f1_scores = [r.get("record_f1", 0.0) for r in runs]
-        coverages = [r.get("record_coverage", 0.0) for r in runs]
+        accuracies = [r.get("accuracy") for r in runs]
+        precisions = [r.get("record_precision") for r in runs]
+        recalls = [r.get("record_recall") for r in runs]
+        f1_scores = [r.get("record_f1") for r in runs]
+        coverages = [r.get("record_coverage") for r in runs]
         latencies = [r.get("latency_seconds", -1.0) for r in runs if r.get("latency_seconds", -1) > 0]
         schema_valids = [r.get("schema_valid", False) for r in runs]
         costs = [r.get("estimated_cost_usd", 0.0) for r in runs]
@@ -608,11 +629,16 @@ def print_summary_report(all_results: List[Dict[str, Any]]) -> None:
         logger.info(f"  Ground truth labels: {runs[0].get('ground_truth_count', 0) if runs else 0}")
         logger.info(f"  Extracted (avg/min/max): {sum(extracted_counts)/len(extracted_counts):.1f} / "
                    f"{min(extracted_counts)}/{max(extracted_counts)}")
-        logger.info(f"  Accuracy (avg): {sum(accuracies)/len(accuracies):.2f}%")
-        logger.info(f"  Precision (avg): {sum(precisions)/len(precisions):.2f}%")
-        logger.info(f"  Recall (avg): {sum(recalls)/len(recalls):.2f}%")
-        logger.info(f"  F1 (avg): {sum(f1_scores)/len(f1_scores):.2f}%")
-        logger.info(f"  Coverage (avg): {sum(coverages)/len(coverages):.2f}%")
+        acc_avg = _average_non_null(accuracies)
+        prec_avg = _average_non_null(precisions)
+        rec_avg = _average_non_null(recalls)
+        f1_avg = _average_non_null(f1_scores)
+        cov_avg = _average_non_null(coverages)
+        logger.info(f"  Accuracy (avg): {acc_avg if acc_avg is not None else 'N/A'}")
+        logger.info(f"  Precision (avg): {prec_avg if prec_avg is not None else 'N/A'}")
+        logger.info(f"  Recall (avg): {rec_avg if rec_avg is not None else 'N/A'}")
+        logger.info(f"  F1 (avg): {f1_avg if f1_avg is not None else 'N/A'}")
+        logger.info(f"  Coverage (avg): {cov_avg if cov_avg is not None else 'N/A'}")
         logger.info(f"  Schema Valid: {sum(schema_valids)}/{len(schema_valids)}")
         reliability = calculate_reliability_summary(runs)
         logger.info(f"  Reliability: {reliability['reliability_score']:.2f}% (n={reliability['sample_size']}; {reliability['reliability_note']})")

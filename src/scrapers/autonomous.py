@@ -66,10 +66,16 @@ class AutonomousScraper(BaseScraper):
             "main article",
             "main li",
             "main div",
+            "main a[href*='/detail/']",
+            "main a[href*='/jobs/']",
+            "main a[href*='/positions/']",
             "article",
             "li",
             "div[class*='job']",
             "div[class*='career']",
+            "a[href*='/detail/']",
+            "a[href*='/jobs/']",
+            "a[href*='/positions/']",
             "a[href*='job']",
             "a[href*='career']",
             "a[href*='position']",
@@ -84,7 +90,7 @@ class AutonomousScraper(BaseScraper):
                     const roots = Array.from(document.querySelectorAll('a[href], article, li, section, tr, div'));
                     const output = [];
                     for (const node of roots.slice(0, 300)) {
-                        const text = (node.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                        const text = (node.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
                         const href = (node.getAttribute && node.getAttribute('href')) || '';
                         const cls = typeof node.className === 'string' ? node.className : '';
                         const tag = (node.tagName || '').toLowerCase();
@@ -95,7 +101,7 @@ class AutonomousScraper(BaseScraper):
                             continue;
                         }
                         const classToken = cls
-                            .split(/\s+/)
+                            .split(/\\s+/)
                             .filter(Boolean)
                             .slice(0, 2)
                             .map((part) => `.${part.replace(/[^a-zA-Z0-9_-]/g, '')}`)
@@ -210,7 +216,10 @@ class AutonomousScraper(BaseScraper):
                         title = text.splitlines()[0].strip()
 
                 url = urljoin(site.benchmark_url(), href) if href else ""
-                if title and url and url not in seen_urls:
+                relevance_source = f"{title} {href} {location}".lower()
+                relevant = any(keyword in relevance_source for keyword in self._job_keywords)
+                relevant = relevant or any(token in href.lower() for token in ("/detail/", "/jobs/", "/positions/", "/career"))
+                if title and url and relevant and url not in seen_urls:
                     results.append(
                         JobListing(
                             title=title,
