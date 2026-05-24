@@ -24,19 +24,33 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def save_bar_chart(values, title, ylabel, fmt, out_name, colors=None):
     fig, ax = plt.subplots(figsize=(12, 6))
-    bars = ax.bar(labels, values, color=colors or "#4C78A8")
+    # ensure numeric values for ylim computation
+    numeric_vals = [v if (isinstance(v, (int, float)) and not math.isnan(v) and not math.isinf(v)) else 0.0 for v in values]
+    bars = ax.bar(range(len(labels)), numeric_vals, color=colors or "#4C78A8")
     ax.set_title(title, fontsize=14)
     ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=10)
     ax.set_xlabel("")
+
+    # Add top padding so labels/annotations don't get cropped
+    top_val = max(numeric_vals) if numeric_vals else 1.0
+    if top_val == 0:
+        ylim_top = 1.0
+    else:
+        ylim_top = top_val * 1.12
+    ax.set_ylim(0, ylim_top)
+
     # annotate
-    for bar, val in zip(bars, values):
+    for i, (bar, val) in enumerate(zip(bars, values)):
         h = bar.get_height()
         if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
             txt = "N/A"
         else:
             txt = fmt.format(val)
-        ax.annotate(txt, xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3),
+        # place annotation slightly below top if it would exceed the y-limit
+        y_pos = min(h, ylim_top * 0.98)
+        ax.annotate(txt, xy=(bar.get_x() + bar.get_width() / 2, y_pos), xytext=(0, 3),
                     textcoords="offset points", ha='center', va='bottom', fontsize=9)
     plt.tight_layout()
     path = OUT_DIR / out_name
