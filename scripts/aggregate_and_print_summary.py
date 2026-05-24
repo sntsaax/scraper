@@ -42,6 +42,13 @@ def main():
         print("No run metadata found in data/results/ to aggregate.")
         sys.exit(1)
 
+    # Filter out records that lack both site and system to avoid 'unknown::' groups
+    before = len(runs)
+    runs = [r for r in runs if r.get("site") and r.get("system")]
+    filtered = before - len(runs)
+    if filtered:
+        print(f"Filtered out {filtered} run(s) missing site/system metadata.")
+
     # Import runner utilities (ensure repo root is on path)
     sys.path.insert(0, str(ROOT))
     try:
